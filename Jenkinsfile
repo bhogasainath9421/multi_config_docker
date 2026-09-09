@@ -186,15 +186,13 @@ pipeline {
             steps {
                 echo '========== Stage: Push - ECR =========='
                 script {
-                    withCredentials([usernamePassword(credentialsId: params.AWS_CREDENTIALS_ID, usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+                    // Use AWS credentials binding compatible with "AWS Credentials" credential type
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: params.AWS_CREDENTIALS_ID]]) {
                         sh '''
                             set -e
                             set -o pipefail
-                            
-                            echo "Configuring AWS CLI credentials..."
-                            aws configure set aws_access_key_id "$AWS_ACCESS_KEY_ID"
-                            aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY"
-                            aws configure set region "${AWS_REGION}"
+
+                            echo "Using AWS region: ${AWS_REGION}"
 
                             echo "Ensuring ECR repository exists..."
                             if ! aws ecr describe-repositories --repository-names ${ECR_REPO} --region ${AWS_REGION} 2>/dev/null; then
@@ -203,8 +201,8 @@ pipeline {
                             fi
 
                             echo "Logging into ECR..."
-                            TOKEN=\$(aws ecr get-login-password --region ${AWS_REGION})
-                    docker login --username AWS -p "\$TOKEN" ${ECR_REPO} || { echo "Failed to login to ECR"; exit 1; }
+                            TOKEN=$(aws ecr get-login-password --region ${AWS_REGION})
+                            docker login --username AWS -p "$TOKEN" ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com || { echo "Failed to login to ECR"; exit 1; }
 
                             PUSH_FAILED=0
                             for TAG in alpine slim latest; do
