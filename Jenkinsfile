@@ -187,29 +187,45 @@ pipeline {
                 echo '========== Stage: Push - ECR =========='
                 script {
                     withCredentials([usernamePassword(credentialsId: params.AWS_CREDENTIALS_ID, usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
-                        sh """
+                        sh '''
                             set -e
+                            set -o pipefail
+                            
                             echo "Configuring AWS CLI credentials..."
-                            aws configure set aws_access_key_id \"$AWS_ACCESS_KEY_ID\"
-                            aws configure set aws_secret_access_key \"$AWS_SECRET_ACCESS_KEY\"
-                            aws configure set region "${params.AWS_REGION}"
+                            aws configure set aws_access_key_id "$AWS_ACCESS_KEY_ID"
+                            aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY"
+                            aws configure set region "${AWS_REGION}"
 
                             echo "Ensuring ECR repository exists..."
-                            aws ecr describe-repositories --repository-names ${params.ECR_REPO} 2>/dev/null || aws ecr create-repository --repository-name ${params.ECR_REPO} --region ${params.AWS_REGION} >/dev/null
+                            if ! aws ecr describe-repositories --repository-names ${ECR_REPO} --region ${AWS_REGION} 2>/dev/null; then
+                                echo "Repository does not exist, creating it..."
+                                aws ecr create-repository --repository-name ${ECR_REPO} --region ${AWS_REGION} || { echo "Failed to create ECR repository"; exit 1; }
+                            fi
 
                             echo "Logging into ECR..."
-                            aws ecr get-login-password --region ${params.AWS_REGION} | docker login --username AWS --password-stdin ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com
+                            aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com || { echo "Failed to login to ECR"; exit 1; }
 
+                            PUSH_FAILED=0
                             for TAG in alpine slim latest; do
-                              if docker images \${IMAGE_NAME}:\${TAG} --format '{{.Repository}}:{{.Tag}}' | grep -q "\${IMAGE_NAME}:\${TAG}"; then
-                                echo "Tagging and pushing \${IMAGE_NAME}:\${TAG} to ECR..."
-                                docker tag \${IMAGE_NAME}:\${TAG} ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.ECR_REPO}:\${TAG}
-                                docker push ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.ECR_REPO}:\${TAG}
+                              if docker images ${IMAGE_NAME}:${TAG} --format '{{.Repository}}:{{.Tag}}' | grep -q "${IMAGE_NAME}:${TAG}"; then
+                                echo "Tagging and pushing ${IMAGE_NAME}:${TAG} to ECR..."
+                                docker tag ${IMAGE_NAME}:${TAG} ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${TAG} || { echo "Failed to tag image ${TAG}"; PUSH_FAILED=1; }
+                                
+                                if [ $PUSH_FAILED -eq 0 ]; then
+                                    docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${TAG} || { echo "Failed to push image ${TAG}"; PUSH_FAILED=1; }
+                                fi
+                                
+                                if [ $PUSH_FAILED -eq 1 ]; then
+                                    echo "Push failed for ${TAG}"
+                                    exit 1
+                                fi
                               else
-                                echo "Image \${IMAGE_NAME}:\${TAG} not found locally, skipping push for \${TAG}"
+                                echo "Image ${IMAGE_NAME}:${TAG} not found locally, skipping push for ${TAG}"
                               fi
                             done
-                        """
+                            
+                            echo "✓ All images pushed successfully to ECR"
+                        '''
                     }
                 }
             }
