@@ -14,6 +14,10 @@ pipeline {
             choices: ['all', 'alpine-linux', 'slim', 'latest'],
             description: 'Select Docker environment(s) to test'
         )
+        string(name: 'AWS_ACCOUNT_ID', defaultValue: '', description: 'AWS Account ID for ECR (leave empty to skip ECR push)')
+        string(name: 'AWS_REGION', defaultValue: 'us-east-1', description: 'AWS region for ECR')
+        string(name: 'ECR_REPO', defaultValue: 'multi-config-docker', description: 'ECR repository name')
+        string(name: 'AWS_CREDENTIALS_ID', defaultValue: 'aws-creds', description: 'Jenkins credentials id containing AWS access key and secret')
     }
     
     environment {
@@ -172,6 +176,42 @@ pipeline {
                     echo "===== Latest Image ====="
                     docker inspect ${IMAGE_NAME}:latest 2>/dev/null || echo "Latest image not built in this run"
                 '''
+            }
+        }
+
+        stage('Push - ECR') {
+            when {
+                expression { return params.AWS_ACCOUNT_ID?.trim() && params.AWS_REGION?.trim() && params.ECR_REPO?.trim() }
+            }
+            steps {
+                echo '========== Stage: Push - ECR =========='
+                script {
+                    withCredentials([usernamePassword(credentialsId: params.AWS_CREDENTIALS_ID, usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+                        sh """
+                            set -e
+                            echo "Configuring AWS CLI credentials..."
+                            aws configure set aws_access_key_id \"$AWS_ACCESS_KEY_ID\"
+                            aws configure set aws_secret_access_key \"$AWS_SECRET_ACCESS_KEY\"
+                            aws configure set region "${params.AWS_REGION}"
+
+                            echo "Ensuring ECR repository exists..."
+                            aws ecr describe-repositories --repository-names ${params.ECR_REPO} 2>/dev/null || aws ecr create-repository --repository-name ${params.ECR_REPO} --region ${params.AWS_REGION} >/dev/null
+
+                            echo "Logging into ECR..."
+                            aws ecr get-login-password --region ${params.AWS_REGION} | docker login --username AWS --password-stdin ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com
+
+                            for TAG in alpine slim latest; do
+                              if docker images \${IMAGE_NAME}:\${TAG} --format '{{.Repository}}:{{.Tag}}' | grep -q "\${IMAGE_NAME}:\${TAG}"; then
+                                echo "Tagging and pushing \${IMAGE_NAME}:\${TAG} to ECR..."
+                                docker tag \${IMAGE_NAME}:\${TAG} ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.ECR_REPO}:\${TAG}
+                                docker push ${params.AWS_ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.ECR_REPO}:\${TAG}
+                              else
+                                echo "Image \${IMAGE_NAME}:\${TAG} not found locally, skipping push for \${TAG}"
+                              fi
+                            done
+                        """
+                    }
+                }
             }
         }
         
