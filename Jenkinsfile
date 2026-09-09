@@ -14,10 +14,10 @@ pipeline {
             choices: ['all', 'alpine-linux', 'slim', 'latest'],
             description: 'Select Docker environment(s) to test'
         )
-        string(name: 'AWS_ACCOUNT_ID', defaultValue: '', description: 'AWS Account ID for ECR (leave empty to skip ECR push)')
-        string(name: 'AWS_REGION', defaultValue: 'us-east-1', description: 'AWS region for ECR')
+        string(name: 'AWS_ACCOUNT_ID', defaultValue: '125840291232', description: 'AWS Account ID for ECR (leave empty to skip ECR push)')
+        string(name: 'AWS_REGION', defaultValue: 'ap-south-2', description: 'AWS region for ECR')
         string(name: 'ECR_REPO', defaultValue: 'multi-config-docker', description: 'ECR repository name')
-        string(name: 'AWS_CREDENTIALS_ID', defaultValue: 'aws-creds', description: 'Jenkins credentials id containing AWS access key and secret')
+        string(name: 'AWS_CREDENTIALS_ID', defaultValue: 'aws_credentials', description: 'Jenkins credentials id containing AWS access key and secret')
     }
     
     environment {
@@ -203,7 +203,8 @@ pipeline {
                             fi
 
                             echo "Logging into ECR..."
-                            aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com || { echo "Failed to login to ECR"; exit 1; }
+                            TOKEN=\$(aws ecr get-login-password --region ${AWS_REGION})
+                    docker login --username AWS -p "\$TOKEN" ${ECR_REPO} || { echo "Failed to login to ECR"; exit 1; }
 
                             PUSH_FAILED=0
                             for TAG in alpine slim latest; do
